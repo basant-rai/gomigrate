@@ -13,7 +13,7 @@ Go struct changes → gomigrate detects diff → generates .up.sql + .down.sql
 ## Install
 
 ```bash
-go install github.com/yourusername/gomigrate/cmd/gomigrate@latest
+go install github.com/basant-rai/gomigrate/cmd/gomigrate@latest
 ```
 
 ## Quick Start
@@ -30,7 +30,7 @@ m.Register(&FuelTransaction{}, "fuel_transactions")
 ### 2. Check for changes
 
 ```bash
-export DATABASE_URL="postgresql://admin:admin@localhost:5432/wallet"
+export DATABASE_URL="postgresql://<USERNAME>:<PASSWORD>@<HOST>:<PORT>/<DB_NAME>"
 gomigrate --diff
 ```
 

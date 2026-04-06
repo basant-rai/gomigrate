@@ -196,7 +196,7 @@ func sqlDefault(sqlType string, nullable bool) string {
 	return ""
 }
 
-// nextVersion calculates the next migration version number
+// NextVersion calculates the next migration version number (exported for CLI use)
 func nextVersion(migrationsDir string) string {
 	entries, err := os.ReadDir(migrationsDir)
 	if err != nil {
