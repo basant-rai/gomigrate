@@ -57,7 +57,7 @@ func GenerateMigration(
 	}
 
 	// Add status message
-	version := nextVersion(migrationsDir)
+	version := NextVersion(migrationsDir)
 	upSQL.WriteString(fmt.Sprintf("\nSELECT '✅ %s_%s applied' AS status;\n", version, name))
 	downSQL.WriteString(fmt.Sprintf("\nSELECT '✅ %s_%s rolled back' AS status;\n", version, name))
 
@@ -197,7 +197,7 @@ func sqlDefault(sqlType string, nullable bool) string {
 }
 
 // NextVersion calculates the next migration version number (exported for CLI use)
-func nextVersion(migrationsDir string) string {
+func NextVersion(migrationsDir string) string {
 	entries, err := os.ReadDir(migrationsDir)
 	if err != nil {
 		return "000001"

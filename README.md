@@ -18,7 +18,7 @@ go install github.com/basant-rai/gomigrate/cmd/gomigrate@latest
 
 ## Quick Start
 
-### 1. Register your models in `cmd/gomigrate/main.go`
+### 1. Register your models in `cmd/migrate/main.go`
 
 ```go
 m := migrator.New(db, "migrations")
