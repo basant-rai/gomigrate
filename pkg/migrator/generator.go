@@ -28,19 +28,29 @@ func GenerateMigration(name string, models []*ModelSchema, dbSchemas map[string]
 			up, down := generateCreateTable(model)
 			upSQL.WriteString(up)
 			downSQL.WriteString(down)
+			for _, idx := range collectIndexes(model) {
+				upSQL.WriteString(generateCreateIndex(idx))
+				downSQL.WriteString(generateDropIndex(idx))
+			}
 			hasChanges = true
 			continue
 		}
 
 		diffs := Diff(model, dbSchema)
-		if len(diffs) == 0 {
+		idxDiffs := DiffIndexes(model, dbSchema)
+		if len(diffs) == 0 && len(idxDiffs) == 0 {
 			continue
 		}
-
 		hasChanges = true
-		up, down := generateAlterTable(diffs)
-		upSQL.WriteString(up)
-		downSQL.WriteString(down)
+		if len(diffs) > 0 {
+			up, down := generateAlterTable(diffs)
+			upSQL.WriteString(up)
+			downSQL.WriteString(down)
+		}
+		for _, idx := range idxDiffs {
+			upSQL.WriteString(generateCreateIndex(idx))
+			downSQL.WriteString(generateDropIndex(idx))
+		}
 	}
 
 	if !hasChanges {
@@ -69,10 +79,9 @@ func generateCreateTable(model *ModelSchema) (up, down string) {
 	sb := strings.Builder{}
 	sb.WriteString(fmt.Sprintf("-- Create table: %s\n", model.TableName))
 	sb.WriteString(fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s (\n", model.TableName))
-	sb.WriteString("    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),\n")
+	sb.WriteString("    id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),\n")
 	sb.WriteString("    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n")
 	sb.WriteString("    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n")
-
 	for i, field := range model.Fields {
 		comma := ","
 		if i == len(model.Fields)-1 {
@@ -80,13 +89,11 @@ func generateCreateTable(model *ModelSchema) (up, down string) {
 		}
 		sb.WriteString(fmt.Sprintf("    %s\n", columnDefinition(field, comma)))
 	}
-
 	sb.WriteString(");\n\n")
-	down = fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE;\n\n", model.TableName)
-	return sb.String(), down
+	return sb.String(), fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE;\n\n", model.TableName)
 }
 
-// generateAlterTable generates ALTER TABLE SQL for diffs
+// generateAlterTable generates ALTER TABLE SQL for column diffs
 func generateAlterTable(diffs []ColumnDiff) (up, down string) {
 	upSB := strings.Builder{}
 	downSB := strings.Builder{}
@@ -95,7 +102,6 @@ func generateAlterTable(diffs []ColumnDiff) (up, down string) {
 	for _, d := range diffs {
 		tableMap[d.Table] = append(tableMap[d.Table], d)
 	}
-
 	tables := []string{}
 	for t := range tableMap {
 		tables = append(tables, t)
@@ -113,22 +119,16 @@ func generateAlterTable(diffs []ColumnDiff) (up, down string) {
 				if diff.Nullable {
 					nullable = ""
 				}
-				defaultVal := sqlDefault(diff.SQLType, diff.Nullable)
-				checkConstraint := ""
-				if len(diff.EnumValues) > 0 {
-					checkConstraint = fmt.Sprintf("\n        CHECK (%s IN (%s))", diff.Column, quotedValues(diff.EnumValues))
-					// First enum value becomes default
-					defaultVal = fmt.Sprintf(" DEFAULT '%s'", diff.EnumValues[0])
-				}
+				defaultVal := resolveDefault(diff.SQLType, diff.EnumValues, diff.Nullable)
+				extras := buildExtras(diff.Column, diff.EnumValues, diff.References, diff.Unique)
 				upSB.WriteString(fmt.Sprintf(
 					"ALTER TABLE %s ADD COLUMN IF NOT EXISTS %s %s %s%s%s;\n",
-					diff.Table, diff.Column, diff.SQLType, nullable, defaultVal, checkConstraint,
+					diff.Table, diff.Column, diff.SQLType, nullable, defaultVal, extras,
 				))
 				downSB.WriteString(fmt.Sprintf(
 					"ALTER TABLE %s DROP COLUMN IF EXISTS %s;\n",
 					diff.Table, diff.Column,
 				))
-
 			case ChangeModify:
 				upSB.WriteString(fmt.Sprintf(
 					"ALTER TABLE %s ALTER COLUMN %s TYPE %s;\n",
@@ -143,37 +143,91 @@ func generateAlterTable(diffs []ColumnDiff) (up, down string) {
 		upSB.WriteString("\n")
 		downSB.WriteString("\n")
 	}
-
 	return upSB.String(), downSB.String()
 }
 
-// columnDefinition builds a full column definition string for CREATE TABLE
+// columnDefinition builds a full column definition for CREATE TABLE
 func columnDefinition(field StructField, comma string) string {
 	nullable := "NOT NULL"
 	if field.Nullable {
 		nullable = ""
 	}
+	defaultVal := resolveDefault(field.SQLType, field.EnumValues, field.Nullable)
+	extras := buildExtras(field.DBName, field.EnumValues, field.References, field.Unique)
 
-	defaultVal := sqlDefault(field.SQLType, field.Nullable)
-	checkConstraint := ""
-
-	if len(field.EnumValues) > 0 {
-		// First value is the default
-		defaultVal = fmt.Sprintf(" DEFAULT '%s'", field.EnumValues[0])
-		checkConstraint = fmt.Sprintf("\n        CHECK (%s IN (%s))", field.DBName, quotedValues(field.EnumValues))
-	}
-
-	return fmt.Sprintf("%s %s %s%s%s%s",
-		field.DBName,
-		field.SQLType,
-		nullable,
-		defaultVal,
-		checkConstraint,
-		comma,
+	return fmt.Sprintf("%-30s %-15s %s%s%s%s",
+		field.DBName, field.SQLType, nullable, defaultVal, extras, comma,
 	)
 }
 
-// quotedValues wraps enum values in single quotes for SQL
+// resolveDefault picks the right DEFAULT:
+// - enum → first enum value
+// - nullable → no default
+// - otherwise → type default
+func resolveDefault(sqlType string, enumValues []string, nullable bool) string {
+	if len(enumValues) > 0 {
+		return fmt.Sprintf(" DEFAULT '%s'", enumValues[0])
+	}
+	return sqlDefault(sqlType, nullable)
+}
+
+// buildExtras builds CHECK, REFERENCES, UNIQUE clauses
+func buildExtras(colName string, enumValues []string, ref *FKRef, unique bool) string {
+	sb := strings.Builder{}
+
+	if len(enumValues) > 0 {
+		sb.WriteString(fmt.Sprintf("\n        CHECK (%s IN (%s))", colName, quotedValues(enumValues)))
+	}
+	if ref != nil {
+		onDelete := ref.OnDelete
+		if onDelete == "" {
+			onDelete = "RESTRICT"
+		}
+		sb.WriteString(fmt.Sprintf("\n        REFERENCES %s(%s) ON DELETE %s", ref.Table, ref.Column, onDelete))
+	}
+	if unique {
+		sb.WriteString(" UNIQUE")
+	}
+	return sb.String()
+}
+
+// collectIndexes gathers all indexes needed for a model
+func collectIndexes(model *ModelSchema) []IndexDef {
+	indexes := []IndexDef{}
+	for _, field := range model.Fields {
+		if field.Index || field.References != nil {
+			indexes = append(indexes, IndexDef{
+				Table:   model.TableName,
+				Columns: []string{field.DBName},
+				Unique:  false,
+				Name:    fmt.Sprintf("idx_%s_%s", model.TableName, field.DBName),
+			})
+		}
+		if field.Unique {
+			indexes = append(indexes, IndexDef{
+				Table:   model.TableName,
+				Columns: []string{field.DBName},
+				Unique:  true,
+				Name:    fmt.Sprintf("idx_%s_%s_unique", model.TableName, field.DBName),
+			})
+		}
+	}
+	return indexes
+}
+
+func generateCreateIndex(idx IndexDef) string {
+	unique := ""
+	if idx.Unique {
+		unique = "UNIQUE "
+	}
+	return fmt.Sprintf("CREATE %sINDEX IF NOT EXISTS %s ON %s (%s);\n",
+		unique, idx.Name, idx.Table, strings.Join(idx.Columns, ", "))
+}
+
+func generateDropIndex(idx IndexDef) string {
+	return fmt.Sprintf("DROP INDEX IF EXISTS %s;\n", idx.Name)
+}
+
 func quotedValues(values []string) string {
 	quoted := make([]string, len(values))
 	for i, v := range values {
@@ -182,7 +236,6 @@ func quotedValues(values []string) string {
 	return strings.Join(quoted, ", ")
 }
 
-// sqlDefault returns a sensible DEFAULT for a SQL type
 func sqlDefault(sqlType string, nullable bool) string {
 	if nullable {
 		return ""
@@ -209,7 +262,6 @@ func NextVersion(migrationsDir string) string {
 	if err != nil {
 		return "000001"
 	}
-
 	max := 0
 	for _, e := range entries {
 		if strings.HasSuffix(e.Name(), ".up.sql") {

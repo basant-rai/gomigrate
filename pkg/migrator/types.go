@@ -7,11 +7,13 @@ type ColumnDiff struct {
 	Table      string
 	Column     string
 	ChangeType ChangeType
-	SQLType    string // for ADD
-	OldType    string // for TYPE CHANGE
-	NewType    string // for TYPE CHANGE
+	SQLType    string
+	OldType    string
+	NewType    string
 	Nullable   bool
 	EnumValues []string // CHECK constraint values
+	References *FKRef   // foreign key reference
+	Unique     bool     // UNIQUE constraint
 }
 
 type ChangeType string
@@ -22,6 +24,21 @@ const (
 	ChangeDrop   ChangeType = "DROP"
 )
 
+// FKRef represents a foreign key reference
+type FKRef struct {
+	Table    string // referenced table
+	Column   string // referenced column (default: id)
+	OnDelete string // CASCADE, SET NULL, RESTRICT (default: RESTRICT)
+}
+
+// IndexDef represents an index to be created
+type IndexDef struct {
+	Table   string
+	Columns []string
+	Unique  bool
+	Name    string // auto-generated if empty
+}
+
 // StructField parsed from Go struct via reflection
 type StructField struct {
 	GoName     string
@@ -31,7 +48,10 @@ type StructField struct {
 	Nullable   bool
 	HasDefault bool
 	Default    string
-	EnumValues []string // from `enum:"val1,val2,val3"` tag
+	EnumValues []string // from `enum:"val1,val2"` tag
+	References *FKRef   // from `references:"table.column"` tag
+	Unique     bool     // from `unique:"true"` tag
+	Index      bool     // from `index:"true"` tag
 }
 
 // DBColumn read from information_schema
@@ -46,6 +66,14 @@ type DBColumn struct {
 type TableSchema struct {
 	TableName string
 	Columns   map[string]DBColumn
+	Indexes   map[string]DBIndex
+}
+
+// DBIndex represents an existing index in the DB
+type DBIndex struct {
+	Name    string
+	Columns []string
+	Unique  bool
 }
 
 // ModelSchema represents a Go struct's desired state

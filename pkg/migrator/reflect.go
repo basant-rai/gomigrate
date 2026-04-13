@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// Valuer interface — implement this on your enum types to auto-discover values
+// Valuer interface — implement on your enum types to auto-discover values
 // Example:
 //
 //	func (KYBStatus) Values() []string {
@@ -73,30 +73,26 @@ func extractFields(t reflect.Type, schema *ModelSchema) {
 			continue
 		}
 
-		// Read enum tag — supports two formats:
-		//   enum:"none,pending,submitted"         → explicit values
-		//   enum:"KYBStatus"                       → reads Values() from type
-		enumValues := readEnumTag(field)
-
 		schema.Fields = append(schema.Fields, StructField{
 			GoName:     field.Name,
 			DBName:     dbName,
 			GoType:     field.Type,
 			SQLType:    sqlType,
 			Nullable:   nullable,
-			EnumValues: enumValues,
+			EnumValues: readEnumTag(field),
+			References: readReferencesTag(field),
+			Unique:     field.Tag.Get("unique") == "true",
+			Index:      field.Tag.Get("index") == "true",
 		})
 	}
 }
 
-// readEnumTag reads the `enum` struct tag and resolves values
+// readEnumTag reads `enum:"val1,val2"` or `enum:"TypeName"` tag
 func readEnumTag(field reflect.StructField) []string {
-	enumTag := field.Tag.Get("enum")
+	enumTag := strings.TrimSpace(field.Tag.Get("enum"))
 	if enumTag == "" {
 		return nil
 	}
-
-	enumTag = strings.TrimSpace(enumTag)
 
 	// Format 1: explicit values — enum:"none,pending,submitted"
 	if strings.Contains(enumTag, ",") {
@@ -114,19 +110,54 @@ func readEnumTag(field reflect.StructField) []string {
 		fieldType = fieldType.Elem()
 	}
 
-	// Create zero value and check if it implements Valuer
+	// Value receiver
 	zeroVal := reflect.New(fieldType).Elem()
 	if valuer, ok := zeroVal.Interface().(Valuer); ok {
 		return valuer.Values()
 	}
 
-	// Also try pointer receiver
-	zeroPtr := reflect.New(fieldType)
-	if valuer, ok := zeroPtr.Interface().(Valuer); ok {
+	// Pointer receiver
+	if valuer, ok := reflect.New(fieldType).Interface().(Valuer); ok {
 		return valuer.Values()
 	}
 
 	return nil
+}
+
+// readReferencesTag reads `references:"table"` or `references:"table.column"` or
+// `references:"table.column:CASCADE"` tag
+//
+// Examples:
+//
+//	references:"users"                → REFERENCES users(id)
+//	references:"users.id"             → REFERENCES users(id)
+//	references:"users.id:CASCADE"     → REFERENCES users(id) ON DELETE CASCADE
+//	references:"users.id:SET NULL"    → REFERENCES users(id) ON DELETE SET NULL
+func readReferencesTag(field reflect.StructField) *FKRef {
+	tag := strings.TrimSpace(field.Tag.Get("references"))
+	if tag == "" {
+		return nil
+	}
+
+	ref := &FKRef{
+		Column:   "id",
+		OnDelete: "RESTRICT",
+	}
+
+	// Split on colon for ON DELETE action
+	parts := strings.SplitN(tag, ":", 2)
+	if len(parts) == 2 {
+		ref.OnDelete = strings.TrimSpace(strings.ToUpper(parts[1]))
+	}
+
+	// Split table.column
+	tableParts := strings.SplitN(parts[0], ".", 2)
+	ref.Table = strings.TrimSpace(tableParts[0])
+	if len(tableParts) == 2 {
+		ref.Column = strings.TrimSpace(tableParts[1])
+	}
+
+	return ref
 }
 
 // isBaseField checks if field is from domain.Base
@@ -160,7 +191,7 @@ func goTypeToSQL(t reflect.Type) (sqlType string, nullable bool) {
 	typeName := resolveTypeName(t)
 	sql, ok := GoToSQL[typeName]
 	if !ok {
-		// Custom string types (like KYBStatus, PaymentSource) → TEXT
+		// Custom string types (KYBStatus, PaymentSource etc.) → TEXT
 		if t.Kind() == reflect.String {
 			return "TEXT", false
 		}
@@ -177,13 +208,11 @@ func resolveTypeName(t reflect.Type) string {
 	if pkgPath == "" {
 		return name
 	}
-
 	if strings.Contains(pkgPath, "time") && name == "Time" {
 		return "time.Time"
 	}
 	if strings.Contains(pkgPath, "uuid") && name == "UUID" {
 		return "uuid.UUID"
 	}
-
 	return name
 }
