@@ -9,8 +9,8 @@ import (
 // Valuer interface — implement this on your enum types to auto-discover values
 // Example:
 //
-//	func (Status) Values() []string {
-//	    return []string{"pending", "submitted", "active", "restricted"}
+//	func (KYBStatus) Values() []string {
+//	    return []string{"none", "pending", "submitted", "active", "restricted"}
 //	}
 type Valuer interface {
 	Values() []string
@@ -58,20 +58,19 @@ func extractFields(t reflect.Type, schema *ModelSchema) {
 			continue
 		}
 
-		// Parse db tag (handle options like `db:"name,omitempty"`)
 		dbName := strings.Split(dbTag, ",")[0]
 		if dbName == "" || dbName == "-" {
 			continue
 		}
 
-		// Skip base fields managed separately
+		// Skip base fields
 		if isBaseField(dbName) {
 			continue
 		}
 
 		sqlType, nullable := goTypeToSQL(field.Type)
 		if sqlType == "" {
-			continue // unsupported type
+			continue
 		}
 
 		// Read enum tag — supports two formats:
@@ -130,7 +129,7 @@ func readEnumTag(field reflect.StructField) []string {
 	return nil
 }
 
-// isBaseField checks if field is from domain.Base (already in initial schema)
+// isBaseField checks if field is from domain.Base
 func isBaseField(name string) bool {
 	base := map[string]bool{
 		"id":         true,
@@ -143,13 +142,11 @@ func isBaseField(name string) bool {
 
 // goTypeToSQL converts a Go reflect.Type to SQL type
 func goTypeToSQL(t reflect.Type) (sqlType string, nullable bool) {
-	// Handle pointer types (nullable)
 	if t.Kind() == reflect.Ptr {
 		sql, _ := goTypeToSQL(t.Elem())
 		return sql, true
 	}
 
-	// Handle slices
 	if t.Kind() == reflect.Slice {
 		if t.Elem().Kind() == reflect.String {
 			return "TEXT[]", false
@@ -163,6 +160,10 @@ func goTypeToSQL(t reflect.Type) (sqlType string, nullable bool) {
 	typeName := resolveTypeName(t)
 	sql, ok := GoToSQL[typeName]
 	if !ok {
+		// Custom string types (like KYBStatus, PaymentSource) → TEXT
+		if t.Kind() == reflect.String {
+			return "TEXT", false
+		}
 		return "", false
 	}
 	return sql, false
@@ -174,10 +175,9 @@ func resolveTypeName(t reflect.Type) string {
 	name := t.Name()
 
 	if pkgPath == "" {
-		return name // primitive type
+		return name
 	}
 
-	// Handle well-known packages
 	if strings.Contains(pkgPath, "time") && name == "Time" {
 		return "time.Time"
 	}
