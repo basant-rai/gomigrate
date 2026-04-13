@@ -2,17 +2,14 @@ package migrator
 
 import "strings"
 
-// Diff compares a ModelSchema (Go struct) against a TableSchema (live DB)
-// and returns a list of changes needed
+// Diff compares a ModelSchema against a live TableSchema and returns changes
 func Diff(model *ModelSchema, db *TableSchema) []ColumnDiff {
 	diffs := []ColumnDiff{}
 
-	// Case 1: Table doesn't exist at all → CREATE TABLE (handled in generator)
 	if len(db.Columns) == 0 {
-		return diffs // generator handles full table creation
+		return diffs
 	}
 
-	// Case 2: Compare each struct field against DB columns
 	for _, field := range model.Fields {
 		dbCol, exists := db.Columns[field.DBName]
 
@@ -24,6 +21,7 @@ func Diff(model *ModelSchema, db *TableSchema) []ColumnDiff {
 				ChangeType: ChangeAdd,
 				SQLType:    field.SQLType,
 				Nullable:   field.Nullable,
+				EnumValues: field.EnumValues, // ← pass through enum values
 			})
 			continue
 		}
@@ -37,6 +35,7 @@ func Diff(model *ModelSchema, db *TableSchema) []ColumnDiff {
 				OldType:    dbCol.DataType,
 				NewType:    field.SQLType,
 				Nullable:   field.Nullable,
+				EnumValues: field.EnumValues,
 			})
 		}
 	}
@@ -53,7 +52,6 @@ func typesCompatible(goSQL, dbType string) bool {
 		return true
 	}
 
-	// Check compatibility map
 	compatibles, ok := SQLTypeCompatible[goSQL]
 	if !ok {
 		return false

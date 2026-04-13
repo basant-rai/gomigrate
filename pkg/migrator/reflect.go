@@ -6,6 +6,16 @@ import (
 	"strings"
 )
 
+// Valuer interface — implement this on your enum types to auto-discover values
+// Example:
+//
+//	func (Status) Values() []string {
+//	    return []string{"pending", "submitted", "active", "restricted"}
+//	}
+type Valuer interface {
+	Values() []string
+}
+
 // ExtractModelSchema reads a Go struct and returns its schema
 func ExtractModelSchema(model interface{}, tableName string) (*ModelSchema, error) {
 	t := reflect.TypeOf(model)
@@ -64,14 +74,60 @@ func extractFields(t reflect.Type, schema *ModelSchema) {
 			continue // unsupported type
 		}
 
+		// Read enum tag — supports two formats:
+		//   enum:"none,pending,submitted"         → explicit values
+		//   enum:"KYBStatus"                       → reads Values() from type
+		enumValues := readEnumTag(field)
+
 		schema.Fields = append(schema.Fields, StructField{
-			GoName:   field.Name,
-			DBName:   dbName,
-			GoType:   field.Type,
-			SQLType:  sqlType,
-			Nullable: nullable,
+			GoName:     field.Name,
+			DBName:     dbName,
+			GoType:     field.Type,
+			SQLType:    sqlType,
+			Nullable:   nullable,
+			EnumValues: enumValues,
 		})
 	}
+}
+
+// readEnumTag reads the `enum` struct tag and resolves values
+func readEnumTag(field reflect.StructField) []string {
+	enumTag := field.Tag.Get("enum")
+	if enumTag == "" {
+		return nil
+	}
+
+	enumTag = strings.TrimSpace(enumTag)
+
+	// Format 1: explicit values — enum:"none,pending,submitted"
+	if strings.Contains(enumTag, ",") {
+		values := strings.Split(enumTag, ",")
+		for i, v := range values {
+			values[i] = strings.TrimSpace(v)
+		}
+		return values
+	}
+
+	// Format 2: type name — enum:"KYBStatus"
+	// Try to call Values() on a zero value of the field type
+	fieldType := field.Type
+	if fieldType.Kind() == reflect.Ptr {
+		fieldType = fieldType.Elem()
+	}
+
+	// Create zero value and check if it implements Valuer
+	zeroVal := reflect.New(fieldType).Elem()
+	if valuer, ok := zeroVal.Interface().(Valuer); ok {
+		return valuer.Values()
+	}
+
+	// Also try pointer receiver
+	zeroPtr := reflect.New(fieldType)
+	if valuer, ok := zeroPtr.Interface().(Valuer); ok {
+		return valuer.Values()
+	}
+
+	return nil
 }
 
 // isBaseField checks if field is from domain.Base (already in initial schema)

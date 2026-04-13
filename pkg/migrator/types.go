@@ -11,6 +11,7 @@ type ColumnDiff struct {
 	OldType    string // for TYPE CHANGE
 	NewType    string // for TYPE CHANGE
 	Nullable   bool
+	EnumValues []string // CHECK constraint values
 }
 
 type ChangeType string
@@ -23,13 +24,14 @@ const (
 
 // StructField parsed from Go struct via reflection
 type StructField struct {
-	GoName   string
-	DBName   string
-	GoType   reflect.Type
-	SQLType  string
-	Nullable bool
+	GoName     string
+	DBName     string
+	GoType     reflect.Type
+	SQLType    string
+	Nullable   bool
 	HasDefault bool
-	Default  string
+	Default    string
+	EnumValues []string // from `enum:"val1,val2,val3"` tag
 }
 
 // DBColumn read from information_schema
@@ -54,27 +56,27 @@ type ModelSchema struct {
 
 // GoToSQL type mapping
 var GoToSQL = map[string]string{
-	"string":      "TEXT",
-	"int":         "INTEGER",
-	"int32":       "INTEGER",
-	"int64":       "BIGINT",
-	"float32":     "FLOAT",
-	"float64":     "FLOAT",
-	"bool":        "BOOLEAN",
-	"time.Time":   "TIMESTAMPTZ",
-	"uuid.UUID":   "UUID",
-	"[]byte":      "BYTEA",
-	"[]string":    "TEXT[]",
+	"string":    "TEXT",
+	"int":       "INTEGER",
+	"int32":     "INTEGER",
+	"int64":     "BIGINT",
+	"float32":   "FLOAT",
+	"float64":   "FLOAT",
+	"bool":      "BOOLEAN",
+	"time.Time": "TIMESTAMPTZ",
+	"uuid.UUID": "UUID",
+	"[]byte":    "BYTEA",
+	"[]string":  "TEXT[]",
 	// Pointer types (nullable)
-	"*string":     "TEXT",
-	"*int":        "INTEGER",
-	"*int32":      "INTEGER",
-	"*int64":      "BIGINT",
-	"*float32":    "FLOAT",
-	"*float64":    "FLOAT",
-	"*bool":       "BOOLEAN",
-	"*time.Time":  "TIMESTAMPTZ",
-	"*uuid.UUID":  "UUID",
+	"*string":    "TEXT",
+	"*int":       "INTEGER",
+	"*int32":     "INTEGER",
+	"*int64":     "BIGINT",
+	"*float32":   "FLOAT",
+	"*float64":   "FLOAT",
+	"*bool":      "BOOLEAN",
+	"*time.Time": "TIMESTAMPTZ",
+	"*uuid.UUID": "UUID",
 }
 
 // SQLTypeCompatible checks if two SQL types are compatible
